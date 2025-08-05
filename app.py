@@ -10,7 +10,7 @@ import os
 from functools import wraps
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = secrets.token_hex(16)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(16))
 
 # Enable CORS for all domains
 CORS(app, supports_credentials=True)
@@ -20,12 +20,12 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Database configuration
 DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': 'India@0306',
-    'database': 'buzzer_quiz_game'
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', ''),
+    'database': os.getenv('DB_NAME', 'buzzer_quiz_game'),
+    'port': int(os.getenv('DB_PORT', 3306))
 }
-
 # Global game state
 game_state = {
     'active_games': {},
@@ -651,9 +651,8 @@ def get_dashboard_stats():
     })
 
 if __name__ == '__main__':
-    # Initialize database on startup
-    if init_database():
-        print("Starting Flask server on http://localhost:5000")
-        socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    port = int(os.getenv('PORT', 5000))
+    if os.getenv('FLASK_ENV') == 'production':
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)
     else:
-        print("Failed to initialize database. Please check your MySQL configuration.")
+        socketio.run(app, debug=True, host='0.0.0.0', port=port)
