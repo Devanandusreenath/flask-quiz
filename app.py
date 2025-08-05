@@ -222,7 +222,22 @@ def admin_required(f):
     return decorated_function
 # Add this route to your app.py file, after your imports and before other routes
 
-
+@app.route('/')
+def home():
+    return jsonify({
+        'message': 'Buzzer Quiz Game API',
+        'status': 'running',
+        'version': '1.0.0',
+        'endpoints': {
+            'health': '/api/health',
+            'login': '/api/login',
+            'register': '/api/register',
+            'quizzes': '/api/quizzes',
+            'players': '/api/players',
+            'sessions': '/api/sessions',
+            'stats': '/api/stats'
+        }
+    })
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -657,5 +672,6 @@ if __name__ == '__main__':
         socketio.run(app, host='0.0.0.0', port=port, debug=False)
     else:
         socketio.run(app, debug=True, host='0.0.0.0', port=port)
+
 
 
