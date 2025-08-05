@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate Buzzer Quiz Game</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .screen {
+            display: none;
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        .screen.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin: 20px 0;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        }
+
+        h1, h2 {
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        h1 {
+            font-size: 3em;
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-size: 16px;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, #56ab2f, #a8e6cf);
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, #FF416C, #FF4B2B);
+        }
+
+        .btn-warning {
+            background: linear-gradient(45deg, #f093fb, #f5576c);
+        }
+
+        .buzz-button {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            font-size: 24px;
+            font-weight: bold;
+            background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+            border: 5px solid white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 20px auto;
+            display: block;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .buzz-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 30px rgba(255, 107, 107, 0.6);
+        }
+
+        .buzz-button:active {
+            transform: scale(0.95);
+        }
+
+        .buzz-button.disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            animation: none;
+        }
+
+        .question-display {
+            text-align: center;
+            font-size: 1.5em;
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            min-height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .timer {
+            font-size: 3em;
+            text-align: center;
+            margin: 20px 0;
+            color: #FFD700;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .timer.warning {
+            color: #FF6B6B;
+            animation: flash 1s infinite;
+        }
+
+        @keyframes flash {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.5; }
+        }
+
+        .leaderboard {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .leaderboard-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .leaderboard-item:hover {
+            transform: translateX(5px);
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .winner {
+            background: linear-gradient(45deg, #FFD700, #FFA500);
+            color: #333;
+            font-weight: bold;
+            font-size: 1.2em;
+            animation: glow 2s infinite alternate;
+        }
+
+        @keyframes glow {
+            from { box-shadow: 0 0 20px rgba(255, 215, 0, 0.5); }
+            to { box-shadow: 0 0 30px rgba(255, 215, 0, 0.8); }
+        }
+
+        .player-list, .question-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+
+        .player-item, .question-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .admin-monitor {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .monitor-section {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 15px;
+        }
+
+        .buzz-alert {
+            background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            text-align: center;
+            font-weight: bold;
+            animation: buzzer-flash 0.5s ease-in-out;
+        }
+
+        @keyframes buzzer-flash {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); background: #FFD700; }
+            100% { transform: scale(1); }
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .option-btn {
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+        }
+
+        .option-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .option-btn.correct {
+            background: linear-gradient(45deg, #56ab2f, #a8e6cf);
+        }
+
+        .option-btn.incorrect {
+            background: linear-gradient(45deg, #FF416C, #FF4B2B);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #FFD700;
+        }
+
+        .message {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .message.success {
+            background: rgba(76, 175, 80, 0.3);
+            color: #4CAF50;
+        }
+
+        .message.error {
+            background: rgba(244, 67, 54, 0.3);
+            color: #F44336;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid #fff;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            h1 {
+                font-size: 2em;
+            }
+            
+            .admin-monitor {
+                grid-template-columns: 1fr;
+            }
+            
+            .options-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Login Screen -->
+        <div id="loginScreen" class="screen active">
+            <div class="card">
+                <h1>🎯 Ultimate Buzzer Quiz Game</h1>
+                <div class="form-group">
+                    <label>Username:</label>
+                    <input type="text" id="username" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label>Password:</label>
+                    <input type="password" id="password" placeholder="Enter password">
+                </div>
+                <button class="btn btn-primary" onclick="login()">Login</button>
+                <div id="loginMessage"></div>
+            </div>
+        </div>
+
+        <!-- Admin Dashboard -->
+        <div id="adminDashboard" class="screen">
+            <div class="card">
+                <h2>🛠 Admin Dashboard</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number" id="totalPlayers">0</div>
+                        <div>Total Players</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="totalQuizzes">0</div>
+                        <div>Total Quizzes</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="activeSessions">0</div>
+                        <div>Active Sessions</div>
+                    </div>
+                </div>
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <button class="btn btn-primary" onclick="showCreateQuiz()">Create Quiz</button>
+                    <button class="btn btn-success" onclick="showManagePlayers()">Manage Players</button>
+                    <button class="btn btn-warning" onclick="showGameMonitor()">Game Monitor</button>
+                    <button class="btn btn-danger" onclick="logout()">Logout</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Quiz Screen -->
+        <div id="createQuizScreen" class="screen">
+            <div class="card">
+                <h2>📝 Create Quiz</h2>
+                <div class="form-group">
+                    <label>Quiz Title:</label>
+                    <input type="text" id="quizTitle" placeholder="Enter quiz title">
+                </div>
+                <div class="form-group">
+                    <label>Points for Correct Answer:</label>
+                    <input type="number" id="correctPoints" value="10" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Points Deducted for Wrong Answer:</label>
+                    <input type="number" id="wrongPoints" value="5" min="0">
+                </div>
+                <div class="form-group">
+                    <label>Time per Question (seconds):</label>
+                    <input type="number" id="timePerQuestion" value="30" min="5">
+                </div>
+                
+                <h3>Add Questions</h3>
+                <div class="form-group">
+                    <label>Question:</label>
+                    <textarea id="questionText" placeholder="Enter your question"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Question Type:</label>
+                    <select id="questionType" onchange="toggleAnswerFields()">
+                        <option value="mcq">Multiple Choice</option>
+                        <option value="open">Open Ended</option>
+                    </select>
+                </div>
+                <div id="mcqOptions">
+                    <div class="form-group">
+                        <label>Option A:</label>
+                        <input type="text" id="optionA" placeholder="Enter option A">
+                    </div>
+                    <div class="form-group">
+                        <label>Option B:</label>
+                        <input type="text" id="optionB" placeholder="Enter option B">
+                    </div>
+                    <div class="form-group">
+                        <label>Option C:</label>
+                        <input type="text" id="optionC" placeholder="Enter option C">
+                    </div>
+                    <div class="form-group">
+                        <label>Option D:</label>
+                        <input type="text" id="optionD" placeholder="Enter option D">
+                    </div>
+                    <div class="form-group">
+                        <label>Correct Answer:</label>
+                        <select id="correctAnswer">
+                            <option value="A">A</option>
+                            <option value="B">B</option>
+                            <option value="C">C</option>
+                            <option value="D">D</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="openAnswer" style="display: none;">
+                    <div class="form-group">
+                        <label>Correct Answer (optional):</label>
+                        <input type="text" id="openCorrectAnswer" placeholder="Enter correct answer (optional)">
+                    </div>
+                </div>
+                
+                <button class="btn btn-success" onclick="addQuestion()">Add Question</button>
+                <button class="btn btn-primary" onclick="saveQuiz()">Save Quiz</button>
+                <button class="btn" onclick="showAdminDashboard()">Back to Dashboard</button>
+                
+                <div class="question-list" id="questionList"></div>
+            </div>
+        </div>
+
+        <!-- Manage Players Screen -->
+        <div id="managePlayersScreen" class="screen">
+            <div class="card">
+                <h2>👥 Manage Players</h2>
+                <div class="form-group">
+                    <label>Player Username:</label>
+                    <input type="text" id="playerUsername" placeholder="Enter player username">
+                </div>
+                <div class="form-group">
+                    <label>Player Password:</label>
+                    <input type="password" id="playerPassword" placeholder="Enter player password">
+                </div>
+                <button class="btn btn-success" onclick="addPlayer()">Add Player</button>
+                <button class="btn" onclick="showAdminDashboard()">Back to Dashboard</button>
+                
+                <div class="player-list" id="playerList"></div>
+            </div>
+        </div>
+
+        <!-- Game Monitor Screen -->
+        <div id="gameMonitorScreen" class="screen">
+            <div class="card">
+                <h2>🖥 Game Monitor</h2>
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <select id="quizSelector" onchange="selectQuiz()">
+                        <option value="">Select a quiz</option>
+                    </select>
+                    <button class="btn btn-success" onclick="startQuiz()" id="startQuizBtn">Start Quiz</button>
+                    <button class="btn btn-danger" onclick="endQuiz()" id="endQuizBtn" style="display: none;">End Quiz</button>
+                    <button class="btn btn-warning" onclick="nextQuestion()" id="nextQuestionBtn" style="display: none;">Next Question</button>
+                    <button class="btn" onclick="showAdminDashboard()">Back to Dashboard</button>
+                </div>
+                
+                <div class="admin-monitor">
+                    <div class="monitor-section">
+                        <h3>Current Question</h3>
+                        <div id="currentQuestionDisplay">Select a quiz to start</div>
+                        <div class="timer" id="adminTimer">--</div>
+                    </div>
+                    <div class="monitor-section">
+                        <h3>Buzz Activity</h3>
+                        <div id="buzzActivity">Waiting for players...</div>
+                    </div>
+                </div>
+                
+                <div class="monitor-section">
+                    <h3>Live Leaderboard</h3>
+                    <div id="liveLeaderboard">No players yet</div>
+                </div>
+                
+                <div id="answerControls" style="display: none; text-align: center; margin: 20px 0;">
+                    <button class="btn btn-success" onclick="markAnswer(true)">✓ Correct</button>
+                    <button class="btn btn-danger" onclick="markAnswer(false)">✗ Wrong</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Player Screen -->
+        <div id="playerScreen" class="screen">
+            <div class="card">
+                <h2>🎮 Player Dashboard</h2>
+                <div id="playerWaiting">
+                    <h3>Waiting for quiz to start...</h3>
+                    <p>Admin will start the quiz shortly. Get ready!</p>
+                </div>
+                
+                <div id="playerGame" style="display: none;">
+                    <div class="question-display" id="playerQuestion">Question will appear here</div>
+                    <div class="timer" id="playerTimer">--</div>
+                    
+                    <button class="buzz-button" id="buzzButton" onclick="buzz()">
+                        🔔 BUZZ!
+                    </button>
+                    
+                    <div id="playerOptions" style="display: none;"></div>
+                    <div id="openAnswerInput" style="display: none;">
+                        <div class="form-group">
+                            <label>Your Answer:</label>
+                            <input type="text" id="playerAnswer" placeholder="Type your answer">
+                            <button class="btn btn-primary" onclick="submitAnswer()">Submit Answer</button>
+                        </div>
+                    </div>
+                    
+                    <div id="playerFeedback" style="margin: 20px 0; text-align: center;"></div>
+                </div>
+                
+                <div id="gameResults" style="display: none;">
+                    <h3>🏆 Game Results</h3>
+                    <div id="finalLeaderboard"></div>
+                </div>
+                
+                <button class="btn btn-danger" onclick="logout()" style="margin-top: 20px;">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE_URL = 'http://localhost:5000/api';
+        
+        // Game State
+        let gameState = {
+            currentUser: null,
+            isAdmin: false,
+            quiz: null,
+            currentQuestionIndex: 0,
+            gameActive: false,
+            timer: null,
+            timeLeft: 0,
+            sessionId: null,
+            socket: null
+        };
+
+        // Initialize Socket.IO connection
+        function initializeSocket() {
+            if (gameState.socket) return;
+            
+            gameState.socket = io('http://localhost:5000');
+            
+            gameState.socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+            
+            gameState.socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+            });
+            
+            gameState.socket.on('game_started', (data) => {
+                if (!gameState.isAdmin) {
+                    document.getElementById('playerWaiting').style.display = 'none';
+                    document.getElementById('playerGame').style.display = 'block';
+                    showMessage('playerFeedback', 'Game Started! 🚀', 'success');
+                }
+            });
+            
+            gameState.socket.on('player_buzzed', (data) => {
+                if (gameState.isAdmin) {
+                    updateBuzzActivity(`🔔 Player buzzed!`);
+                } else if (data.user_id !== gameState.currentUser?.id) {
+                    document.getElementById('buzzButton').disabled = true;
+                    document.getElementById('buzzButton').textContent = 'Someone Buzzed!';
+                }
+            });
+            
+            gameState.socket.on('answer_submitted', (data) => {
+                if (gameState.isAdmin) {
+                    updateBuzzActivity(`Player answered: "${data.answer}"`);
+                    document.getElementById('answerControls').style.display = 'block';
+                }
+            });
+        }
+
+        // API Helper Functions
+        async function apiRequest(endpoint, method = 'GET', data = null) {
+            const options = {
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'include'
+            };
+            
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                return await response.json();
+            } catch (error) {
+                console.error('API request failed:', error);
+                return { success: false, message: 'Network error' };
+            }
+        }
+
+        // Authentication
+        async function login() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            
+            if (!username || !password) {
+                showMessage('loginMessage', 'Please enter both username and password', 'error');
+                return;
+            }
+            
+            showLoading('loginMessage');
+            const result = await apiRequest('/login', 'POST', { username, password });
+            
+            if (result.success) {
+                gameState.currentUser = result.user;
+                gameState.isAdmin = result.user.role === 'admin';
+                
+                initializeSocket();
+                
+                if (gameState.isAdmin) {
+                    showScreen('adminDashboard');
+                    loadDashboardStats();
+                } else {
+                    showScreen('playerScreen');
+                }
+                
+                showMessage('loginMessage', `Welcome ${result.user.username}! 🎮`, 'success');
+            } else {
+                showMessage('loginMessage', result.message, 'error');
+            }
+        }
+
+        async function logout() {
+            await apiRequest('/logout', 'POST');
+            gameState.currentUser = null;
+            gameState.isAdmin = false;
+            gameState.gameActive = false;
+            
+            if (gameState.timer) clearInterval(gameState.timer);
+            if (gameState.socket) {
+                gameState.socket.disconnect();
+                gameState.socket = null;
+            }
+            
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+            showScreen('loginScreen');
+        }
+
+        // Dashboard Functions
+        async function loadDashboardStats() {
+            const result = await apiRequest('/stats');
+            if (result.success) {
+                document.getElementById('totalPlayers').textContent = result.stats.total_players;
+                document.getElementById('totalQuizzes').textContent = result.stats.total_quizzes;
+                document.getElementById('activeSessions').textContent = result.stats.active_sessions;
+            }
+        }
+
+        // Quiz Management
+        let currentQuiz = { questions: [] };
+
+        function toggleAnswerFields() {
+            const questionType = document.getElementById('questionType').value;
+            const mcqOptions = document.getElementById('mcqOptions');
+            const openAnswer = document.getElementById('openAnswer');
+            
+            if (questionType === 'mcq') {
+                mcqOptions.style.display = 'block';
+                openAnswer.style.display = 'none';
+            } else {
+                mcqOptions.style.display = 'none';
+                openAnswer.style.display = 'block';
+            }
+        }
+
+        function addQuestion() {
+            const questionText = document.getElementById('questionText').value.trim();
+            const questionType = document.getElementById('questionType').value;
+            
+            if (!questionText) {
+                alert('Please enter a question');
+                return;
+            }
+            
+            const question = {
+                id: Date.now(),
+                text: questionText,
+                type: questionType
+            };
+            
+            if (questionType === 'mcq') {
+                const optionA = document.getElementById('optionA').value.trim();
+                const optionB = document.getElementById('optionB').value.trim();
+                const optionC = document.getElementById('optionC').value.trim();
+                const optionD = document.getElementById('optionD').value.trim();
+                const correctAnswer = document.getElementById('correctAnswer').value;
+                
+                if (!optionA || !optionB || !optionC || !optionD) {
+                    alert('Please fill all options');
+                    return;
+                }
+                
+                question.options = { A: optionA, B: optionB, C: optionC, D: optionD };
+                question.correct_answer = correctAnswer;
+                
+                // Clear fields
+                ['optionA', 'optionB', 'optionC', 'optionD'].forEach(id => {
+                    document.getElementById(id).value = '';
+                });
+            } else {
+                question.correct_answer = document.getElementById('openCorrectAnswer').value.trim();
+                document.getElementById('openCorrectAnswer').value = '';
+            }
+            
+            currentQuiz.questions.push(question);
+            document.getElementById('questionText').value = '';
+            displayQuestions();
+        }
+
+        function displayQuestions() {
+            const questionList = document.getElementById('questionList');
+            if (!currentQuiz.questions.length) {
+                questionList.innerHTML = '<p>No questions added yet</p>';
+                return;
+            }
+            
+            questionList.innerHTML = currentQuiz.questions.map((q, index) => `
+                <div class="question-item">
+                    <div>
+                        <strong>Q${index + 1}:</strong> ${q.text}
+                        <br><small>Type: ${q.type.toUpperCase()}</small>
+                        ${q.type === 'mcq' ? `<br><small>Answer: ${q.correct_answer}</small>` : ''}
+                    </div>
+                    <button class="btn btn-danger" onclick="removeQuestion(${q.id})">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        function removeQuestion(questionId) {
+            currentQuiz.questions = currentQuiz.questions.filter(q => q.id !== questionId);
+            displayQuestions();
+        }
+
+        async function saveQuiz() {
+            const title = document.getElementById('quizTitle').value.trim();
+            const correctPoints = parseInt(document.getElementById('correctPoints').value);
+            const wrongPoints = parseInt(document.getElementById('wrongPoints').value);
+            const timePerQuestion = parseInt(document.getElementById('timePerQuestion').value);
+            
+            if (!title) {
+                alert('Please enter a quiz title');
+                return;
+            }
+            
+            if (!currentQuiz.questions.length) {
+                alert('Please add at least one question');
+                return;
+            }
+            
+            const quizData = {
+                title,
+                correct_points: correctPoints,
+                wrong_points: wrongPoints,
+                time_per_question: timePerQuestion,
+                questions: currentQuiz.questions
+            };
+            
+            const result = await apiRequest('/quizzes', 'POST', quizData);
+            
+            if (result.success) {
+                alert('Quiz saved successfully!');
+                currentQuiz = { questions: [] };
+                displayQuestions();
+                showAdminDashboard();
+            } else {
+                alert('Error saving quiz: ' + result.message);
+            }
+        }
+
+        // Player Management
+        async function addPlayer() {
+            const username = document.getElementById('playerUsername').value.trim();
+            const password = document.getElementById('playerPassword').value;
+            
+            if (!username || !password) {
+                alert('Please enter both username and password');
+                return;
+            }
+            
+            const result = await apiRequest('/register', 'POST', { username, password });
+            
+            if (result.success) {
+                document.getElementById('playerUsername').value = '';
+                document.getElementById('playerPassword').value = '';
+                loadPlayerList();
+                alert('Player added successfully!');
+            } else {
+                alert('Error: ' + result.message);
+            }
+        }
+
+        async function loadPlayerList() {
+            const result = await apiRequest('/players');
+            const playerList = document.getElementById('playerList');
+            
+            if (result.success && result.players.length > 0) {
+                playerList.innerHTML = result.players.map(player => `
+                    <div class="player-item">
+                        <div>
+                            <strong>${player.username}</strong>
+                            <br><small>Score: ${player.total_score} | Games: ${player.games_played}</small>
+                        </div>
+                        <button class="btn btn-danger" onclick="removePlayer(${player.id})">Remove</button>
+                    </div>
+                `).join('');
+            } else {
+                playerList.innerHTML = '<p>No players found</p>';
+            }
+        }
+
+        async function removePlayer(playerId) {
+            if (confirm('Are you sure you want to remove this player?')) {
+                const result = await apiRequest(`/players/${playerId}`, 'DELETE');
+                if (result.success) {
+                    loadPlayerList();
+                    alert('Player removed successfully');
+                } else {
+                    alert('Error removing player: ' + result.message);
+                }
+            }
+        }
+
+        // Game Monitor
+        async function loadQuizzes() {
+            const result = await apiRequest('/quizzes');
+            const quizSelector = document.getElementById('quizSelector');
+            
+            if (result.success) {
+                quizSelector.innerHTML = '<option value="">Select a quiz</option>' + 
+                    result.quizzes.map(quiz => 
+                        `<option value="${quiz.id}">${quiz.title} (${quiz.question_count} questions)</option>`
+                    ).join('');
+            }
+        }
+
+        async function selectQuiz() {
+            const quizId = document.getElementById('quizSelector').value;
+            if (!quizId) return;
+            
+            const result = await apiRequest(`/quizzes/${quizId}`);
+            if (result.success) {
+                gameState.quiz = result.quiz;
+                document.getElementById('currentQuestionDisplay').textContent = 'Quiz loaded: ' + result.quiz.title;
+            }
+        }
+
+        async function startQuiz() {
+            if (!gameState.quiz) {
+                alert('Please select a quiz first');
+                return;
+            }
+            
+            // Create game session
+            const sessionResult = await apiRequest('/sessions', 'POST', { quiz_id: gameState.quiz.id });
+            if (!sessionResult.success) {
+                alert('Error creating session: ' + sessionResult.message);
+                return;
+            }
+            
+            gameState.sessionId = sessionResult.session_id;
+            
+            // Start the session
+            const startResult = await apiRequest(`/sessions/${gameState.sessionId}/start`, 'POST');
+            if (startResult.success) {
+                gameState.gameActive = true;
+                gameState.currentQuestionIndex = 0;
+                
+                document.getElementById('startQuizBtn').style.display = 'none';
+                document.getElementById('endQuizBtn').style.display = 'inline';
+                document.getElementById('nextQuestionBtn').style.display = 'inline';
+                
+                displayCurrentQuestion();
+                startTimer();
+                
+                // Join the session room
+                if (gameState.socket) {
+                    gameState.socket.emit('join_session', {
+                        session_id: gameState.sessionId,
+                        user_id: gameState.currentUser.id
+                    });
+                }
+            }
+        }
+
+        function endQuiz() {
+            gameState.gameActive = false;
+            if (gameState.timer) clearInterval(gameState.timer);
+            
+            document.getElementById('startQuizBtn').style.display = 'inline';
+            document.getElementById('endQuizBtn').style.display = 'none';
+            document.getElementById('nextQuestionBtn').style.display = 'none';
+            document.getElementById('answerControls').style.display = 'none';
+            
+            alert('Quiz ended!');
+        }
+
+        function nextQuestion() {
+            if (gameState.currentQuestionIndex < gameState.quiz.questions.length - 1) {
+                gameState.currentQuestionIndex++;
+                document.getElementById('answerControls').style.display = 'none';
+                displayCurrentQuestion();
+                startTimer();
+                resetBuzzButton();
+            } else {
+                endQuiz();
+            }
+        }
+
+        function displayCurrentQuestion() {
+            if (!gameState.quiz || !gameState.gameActive) return;
+            
+            const question = gameState.quiz.questions[gameState.currentQuestionIndex];
+            const questionDisplay = `Q${gameState.currentQuestionIndex + 1}: ${question.text}`;
+            
+            // Update displays
+            document.getElementById('currentQuestionDisplay').textContent = questionDisplay;
+            
+            const playerQuestion = document.getElementById('playerQuestion');
+            if (playerQuestion) {
+                playerQuestion.textContent = questionDisplay;
+                
+                const playerOptions = document.getElementById('playerOptions');
+                const openAnswerInput = document.getElementById('openAnswerInput');
+                
+                if (question.type === 'mcq') {
+                    playerOptions.style.display = 'block';
+                    openAnswerInput.style.display = 'none';
+                    playerOptions.innerHTML = Object.entries(question.options).map(([key, value]) => 
+                        `<button class="option-btn" onclick="selectOption('${key}')" id="option${key}">${key}. ${value}</button>`
+                    ).join('');
+                } else {
+                    playerOptions.style.display = 'none';
+                    openAnswerInput.style.display = 'block';
+                    document.getElementById('playerAnswer').value = '';
+                }
+            }
+        }
+
+        function startTimer() {
+            if (gameState.timer) clearInterval(gameState.timer);
+            
+            gameState.timeLeft = gameState.quiz.settings.time_per_question;
+            updateTimerDisplay();
+            
+            gameState.timer = setInterval(() => {
+                gameState.timeLeft--;
+                updateTimerDisplay();
+                
+                if (gameState.timeLeft <= 0) {
+                    clearInterval(gameState.timer);
+                    handleTimeUp();
+                }
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            const timerElements = document.querySelectorAll('.timer');
+            const timeText = gameState.timeLeft > 0 ? gameState.timeLeft : 'TIME UP!';
+            
+            timerElements.forEach(timer => {
+                timer.textContent = timeText;
+                timer.classList.toggle('warning', gameState.timeLeft <= 10);
+            });
+        }
+
+        function handleTimeUp() {
+            const buzzButton = document.getElementById('buzzButton');
+            if (buzzButton) {
+                buzzButton.disabled = true;
+                buzzButton.classList.add('disabled');
+                buzzButton.textContent = 'TIME UP!';
+            }
+            
+            updateBuzzActivity('⏰ Time up! Moving to next question.');
+            setTimeout(() => nextQuestion(), 2000);
+        }
+
+        function resetBuzzButton() {
+            const buzzButton = document.getElementById('buzzButton');
+            if (buzzButton) {
+                buzzButton.disabled = false;
+                buzzButton.classList.remove('disabled');
+                buzzButton.textContent = '🔔 BUZZ!';
+            }
+        }
+
+        // Player Functions
+        function buzz() {
+            if (!gameState.gameActive || gameState.timeLeft <= 0) return;
+            
+            // Disable buzz button
+            const buzzButton = document.getElementById('buzzButton');
+            buzzButton.disabled = true;
+            buzzButton.classList.add('disabled');
+            buzzButton.textContent = 'BUZZED!';
+            
+            // Emit buzz to server
+            if (gameState.socket) {
+                gameState.socket.emit('buzz', {
+                    session_id: gameState.sessionId,
+                    user_id: gameState.currentUser.id
+                });
+            }
+            
+            // Show answer options
+            const question = gameState.quiz.questions[gameState.currentQuestionIndex];
+            if (question.type === 'mcq') {
+                document.getElementById('playerOptions').style.display = 'block';
+            } else {
+                document.getElementById('openAnswerInput').style.display = 'block';
+            }
+        }
+
+        function selectOption(option) {
+            const question = gameState.quiz.questions[gameState.currentQuestionIndex];
+            const isCorrect = option === question.correct_answer;
+            
+            // Highlight selected option
+            document.querySelectorAll('.option-btn').forEach(btn => {
+                btn.disabled = true;
+                if (btn.id === `option${option}`) {
+                    btn.classList.add(isCorrect ? 'correct' : 'incorrect');
+                }
+                if (btn.id === `option${question.correct_answer}`) {
+                    btn.classList.add('correct');
+                }
+            });
+            
+            showAnswerFeedback(isCorrect, question.correct_answer);
+            
+            // Emit answer to server
+            if (gameState.socket) {
+                gameState.socket.emit('submit_answer', {
+                    session_id: gameState.sessionId,
+                    user_id: gameState.currentUser.id,
+                    answer: option,
+                    is_correct: isCorrect
+                });
+            }
+        }
+
+        function submitAnswer() {
+            const playerAnswer = document.getElementById('playerAnswer').value.trim();
+            if (!playerAnswer) {
+                alert('Please enter an answer');
+                return;
+            }
+            
+            // Emit answer to server for admin review
+            if (gameState.socket) {
+                gameState.socket.emit('submit_answer', {
+                    session_id: gameState.sessionId,
+                    user_id: gameState.currentUser.id,
+                    answer: playerAnswer
+                });
+            }
+            
+            showAnswerFeedback(null, 'Admin is reviewing your answer...');
+        }
+
+        function showAnswerFeedback(isCorrect, message) {
+            const playerFeedback = document.getElementById('playerFeedback');
+            if (!playerFeedback) return;
+            
+            if (isCorrect === null) {
+                playerFeedback.innerHTML = `<div class="message" style="background: #ffa500; padding: 15px; border-radius: 10px;">⏳ ${message}</div>`;
+            } else if (isCorrect) {
+                playerFeedback.innerHTML = `<div class="message success" style="padding: 15px; border-radius: 10px;">✅ Correct! Well done!</div>`;
+            } else {
+                playerFeedback.innerHTML = `<div class="message error" style="padding: 15px; border-radius: 10px;">❌ Wrong! Correct answer: ${message}</div>`;
+            }
+        }
+
+        // Admin Functions
+        function markAnswer(isCorrect) {
+            updateBuzzActivity(`Admin marked answer as ${isCorrect ? 'CORRECT' : 'WRONG'}`);
+            document.getElementById('answerControls').style.display = 'none';
+            setTimeout(() => nextQuestion(), 2000);
+        }
+
+        function updateBuzzActivity(message) {
+            const buzzActivity = document.getElementById('buzzActivity');
+            if (buzzActivity) {
+                const alertDiv = document.createElement('div');
+                alertDiv.className = 'buzz-alert';
+                alertDiv.textContent = message;
+                buzzActivity.insertBefore(alertDiv, buzzActivity.firstChild);
+                
+                // Keep only last 5 messages
+                while (buzzActivity.children.length > 5) {
+                    buzzActivity.removeChild(buzzActivity.lastChild);
+                }
+            }
+        }
+
+        // UI Helper Functions
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function showMessage(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.innerHTML = `<div class="message ${type}">${message}</div>`;
+                setTimeout(() => {
+                    element.innerHTML = '';
+                }, 3000);
+            }
+        }
+
+        function showLoading(elementId) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.innerHTML = `
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Loading...</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Navigation Functions
+        function showAdminDashboard() {
+            showScreen('adminDashboard');
+            loadDashboardStats();
+        }
+
+        function showCreateQuiz() {
+            showScreen('createQuizScreen');
+            currentQuiz = { questions: [] };
+            displayQuestions();
+        }
+
+        function showManagePlayers() {
+            showScreen('managePlayersScreen');
+            loadPlayerList();
+        }
+
+        function showGameMonitor() {
+            showScreen('gameMonitorScreen');
+            loadQuizzes();
+        }
+
+        // Initialize the app
+        window.onload = function() {
+            console.log('Quiz Game initialized');
+            
+            // Check if user is already logged in (for development)
+            const savedUser = sessionStorage.getItem('currentUser');
+            if (savedUser) {
+                try {
+                    gameState.currentUser = JSON.parse(savedUser);
+                    gameState.isAdmin = gameState.currentUser.role === 'admin';
+                    initializeSocket();
+                    
+                    if (gameState.isAdmin) {
+                        showScreen('adminDashboard');
+                        loadDashboardStats();
+                    } else {
+                        showScreen('playerScreen');
+                    }
+                } catch (e) {
+                    console.log('No valid saved session');
+                }
+            }
+        };
+
+        // Save user session for development
+        function saveUserSession() {
+            if (gameState.currentUser) {
+                sessionStorage.setItem('currentUser', JSON.stringify(gameState.currentUser));
+            }
+        }
+
+        // Override login to save session
+        const originalLogin = login;
+        login = async function() {
+            await originalLogin();
+            saveUserSession();
+        };
+    </script>
+</body>
+</html>
