@@ -220,7 +220,42 @@ def admin_required(f):
         
         return f(*args, **kwargs)
     return decorated_function
+# Add this route to your app.py file, after your imports and before other routes
 
+@app.route('/')
+def home():
+    return jsonify({
+        'message': 'Buzzer Quiz Game API',
+        'status': 'running',
+        'version': '1.0.0',
+        'endpoints': {
+            'health': '/api/health',
+            'login': '/api/login',
+            'register': '/api/register',
+            'quizzes': '/api/quizzes',
+            'players': '/api/players',
+            'sessions': '/api/sessions',
+            'stats': '/api/stats'
+        }
+    })
+
+# Optional: Add a catch-all route for undefined paths
+@app.route('/<path:path>')
+def catch_all(path):
+    return jsonify({
+        'error': 'Endpoint not found',
+        'requested_path': f'/{path}',
+        'available_endpoints': [
+            '/api/health',
+            '/api/login',
+            '/api/logout', 
+            '/api/register',
+            '/api/quizzes',
+            '/api/players',
+            '/api/sessions',
+            '/api/stats'
+        ]
+    }), 404
 # Authentication Routes
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -656,3 +691,4 @@ if __name__ == '__main__':
         socketio.run(app, host='0.0.0.0', port=port, debug=False)
     else:
         socketio.run(app, debug=True, host='0.0.0.0', port=port)
+
