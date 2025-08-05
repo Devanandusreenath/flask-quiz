@@ -1,6 +1,27 @@
-Flask==2.3.3
+# Flask Framework and Extensions
+Flask==3.0.0
 Flask-CORS==4.0.0
 Flask-SocketIO==5.3.6
+
+# Database
 PyMySQL==1.1.0
+
+# WebSocket Support
+python-socketio==5.9.0
+python-engineio==4.7.1
+
+# Environment Variables
 python-dotenv==1.0.0
-gunicorn==21.2.0
+
+# Security and Authentication
+Werkzeug==3.0.1
+
+# JSON and Data Handling
+cryptography==41.0.7
+
+# Event-driven programming
+eventlet==0.33.3
+
+# Optional: For better performance in production
+# gunicorn==21.2.0
+# gevent==23.9.1
