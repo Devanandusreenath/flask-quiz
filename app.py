@@ -15,24 +15,28 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(16))
 # Enable CORS for all domains
 CORS(app, supports_credentials=True)
 
-# Initialize SocketIO for real-time features - Fixed async_mode
+# Initialize SocketIO for real-time features
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Database configuration
 DB_CONFIG = {
-    'host': os.getenv('MYSQLHOST'),
-    'user': os.getenv('MYSQLUSER'),
-    'password': os.getenv('MYSQL_ROOT_PASSWORD'),
-    'database': os.getenv('MYSQL_DATABASE'),
-    'port': int(os.getenv('MYSQLPORT','3306'))
+    'host': os.getenv('MYSQLHOST', 'localhost'),
+    'user': os.getenv('MYSQLUSER', 'root'),
+    'password': os.getenv('MYSQL_ROOT_PASSWORD', ''),
+    'database': os.getenv('MYSQL_DATABASE', 'buzzer_quiz_game'),
+    'port': int(os.getenv('MYSQLPORT', '3306'))
 }
+
 # Global game state
 game_state = {
     'active_games': {},
     'connected_users': {},
-    'current_question': None,
+    'current_session': None,
     'timer_active': False,
-    'buzzed_player': None
+    'buzzed_player': None,
+    'current_quiz': None,
+    'current_question_index': 0,
+    'players_in_session': {}
 }
 
 def get_db_connection():
@@ -57,7 +61,7 @@ def init_database():
     try:
         # First connect without database to create it
         temp_config = DB_CONFIG.copy()
-        temp_config.pop('database', None)
+        database_name = temp_config.pop('database', 'buzzer_quiz_game')
         
         connection = pymysql.connect(
             host=temp_config['host'],
@@ -68,7 +72,7 @@ def init_database():
         cursor = connection.cursor()
         
         # Create database if it doesn't exist
-        cursor.execute("CREATE DATABASE IF NOT EXISTS buzzer_quiz_game")
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {database_name}")
         cursor.close()
         connection.close()
         
@@ -792,6 +796,10 @@ def get_html_template():
                 <div id="playerWaiting">
                     <h3>Waiting for quiz to start...</h3>
                     <p>Admin will start the quiz shortly. Get ready!</p>
+                    <div class="leaderboard">
+                        <h4>Connected Players</h4>
+                        <div id="connectedPlayersList">Loading...</div>
+                    </div>
                 </div>
                 
                 <div id="playerGame" style="display: none;">
@@ -812,6 +820,11 @@ def get_html_template():
                     </div>
                     
                     <div id="playerFeedback" style="margin: 20px 0; text-align: center;"></div>
+                    
+                    <div class="leaderboard">
+                        <h4>Live Leaderboard</h4>
+                        <div id="playerLeaderboard">Loading...</div>
+                    </div>
                 </div>
                 
                 <div id="gameResults" style="display: none;">
@@ -825,7 +838,7 @@ def get_html_template():
     </div>
 
     <script>
-        // Configuration - Updated to use relative URLs
+        // Configuration
         const API_BASE_URL = '/api';
         
         // Game State
@@ -838,10 +851,12 @@ def get_html_template():
             timer: null,
             timeLeft: 0,
             sessionId: null,
-            socket: null
+            socket: null,
+            buzzed: false,
+            connectedPlayers: []
         };
 
-        // Initialize Socket.IO connection - Updated to use relative URL
+        // Initialize Socket.IO connection
         function initializeSocket() {
             if (gameState.socket) return;
             
@@ -849,6 +864,14 @@ def get_html_template():
             
             gameState.socket.on('connect', () => {
                 console.log('Connected to server');
+                // Join as player immediately after connection
+                if (gameState.currentUser) {
+                    gameState.socket.emit('join_as_player', {
+                        user_id: gameState.currentUser.id,
+                        username: gameState.currentUser.username,
+                        is_admin: gameState.isAdmin
+                    });
+                }
             });
             
             gameState.socket.on('disconnect', () => {
@@ -856,26 +879,78 @@ def get_html_template():
             });
             
             gameState.socket.on('game_started', (data) => {
+                console.log('Game started event received:', data);
                 if (!gameState.isAdmin) {
+                    gameState.gameActive = true;
+                    gameState.quiz = data.quiz;
+                    gameState.sessionId = data.session_id;
                     document.getElementById('playerWaiting').style.display = 'none';
                     document.getElementById('playerGame').style.display = 'block';
                     showMessage('playerFeedback', 'Game Started! 🚀', 'success');
                 }
             });
             
-            gameState.socket.on('player_buzzed', (data) => {
-                if (gameState.isAdmin) {
-                    updateBuzzActivity(`🔔 Player buzzed!`);
-                } else if (data.user_id !== gameState.currentUser?.id) {
-                    document.getElementById('buzzButton').disabled = true;
-                    document.getElementById('buzzButton').textContent = 'Someone Buzzed!';
+            gameState.socket.on('question_update', (data) => {
+                console.log('Question update received:', data);
+                if (!gameState.isAdmin) {
+                    gameState.currentQuestionIndex = data.question_index;
+                    displayPlayerQuestion(data.question);
+                    startPlayerTimer(data.time_limit);
+                    resetBuzzButton();
                 }
             });
             
-            gameState.socket.on('answer_submitted', (data) => {
+            gameState.socket.on('player_buzzed', (data) => {
+                console.log('Player buzzed event:', data);
                 if (gameState.isAdmin) {
-                    updateBuzzActivity(`Player answered: "${data.answer}"`);
-                    document.getElementById('answerControls').style.display = 'block';
+                    updateBuzzActivity(`🔔 ${data.username} buzzed!`);
+                } else if (data.user_id !== gameState.currentUser?.id) {
+                    // Disable buzz for other players
+                    const buzzButton = document.getElementById('buzzButton');
+                    if (buzzButton) {
+                        buzzButton.disabled = true;
+                        buzzButton.classList.add('disabled');
+                        buzzButton.textContent = `${data.username} Buzzed!`;
+                    }
+                }
+            });
+            
+            gameState.socket.on('answer_result', (data) => {
+                console.log('Answer result received:', data);
+                if (!gameState.isAdmin && data.user_id === gameState.currentUser?.id) {
+                    showAnswerFeedback(data.is_correct, data.message || 'Answer submitted');
+                }
+            });
+            
+            gameState.socket.on('leaderboard_update', (data) => {
+                console.log('Leaderboard update received:', data);
+                updateLeaderboard(data.leaderboard);
+            });
+            
+            gameState.socket.on('players_update', (data) => {
+                console.log('Players update received:', data);
+                gameState.connectedPlayers = data.players;
+                updateConnectedPlayersList();
+                if (gameState.isAdmin) {
+                    updateAdminLeaderboard();
+                }
+            });
+            
+            gameState.socket.on('game_ended', (data) => {
+                console.log('Game ended event received:', data);
+                gameState.gameActive = false;
+                if (gameState.timer) clearInterval(gameState.timer);
+                
+                if (!gameState.isAdmin) {
+                    document.getElementById('playerGame').style.display = 'none';
+                    document.getElementById('gameResults').style.display = 'block';
+                    document.getElementById('finalLeaderboard').innerHTML = generateLeaderboardHTML(data.final_leaderboard);
+                }
+            });
+            
+            gameState.socket.on('timer_update', (data) => {
+                if (!gameState.isAdmin) {
+                    updatePlayerTimer(data.time_left);
                 }
             });
         }
@@ -927,6 +1002,8 @@ def get_html_template():
                     loadDashboardStats();
                 } else {
                     showScreen('playerScreen');
+                    // Load connected players for waiting screen
+                    updateConnectedPlayersList();
                 }
                 
                 showMessage('loginMessage', `Welcome ${result.user.username}! 🎮`, 'success');
@@ -1136,7 +1213,7 @@ def get_html_template():
             }
         }
 
-        // Game Monitor
+        // Game Monitor Functions
         async function loadQuizzes() {
             const result = await apiRequest('/quizzes');
             const quizSelector = document.getElementById('quizSelector');
@@ -1185,22 +1262,23 @@ def get_html_template():
                 document.getElementById('endQuizBtn').style.display = 'inline';
                 document.getElementById('nextQuestionBtn').style.display = 'inline';
                 
+                // Start first question
                 displayCurrentQuestion();
-                startTimer();
-                
-                // Join the session room
-                if (gameState.socket) {
-                    gameState.socket.emit('join_session', {
-                        session_id: gameState.sessionId,
-                        user_id: gameState.currentUser.id
-                    });
-                }
+                startAdminTimer();
+                updateBuzzActivity('Quiz started! Waiting for players...');
             }
         }
 
         function endQuiz() {
             gameState.gameActive = false;
             if (gameState.timer) clearInterval(gameState.timer);
+            
+            // Emit game ended
+            if (gameState.socket) {
+                gameState.socket.emit('end_game', {
+                    session_id: gameState.sessionId
+                });
+            }
             
             document.getElementById('startQuizBtn').style.display = 'inline';
             document.getElementById('endQuizBtn').style.display = 'none';
@@ -1215,8 +1293,18 @@ def get_html_template():
                 gameState.currentQuestionIndex++;
                 document.getElementById('answerControls').style.display = 'none';
                 displayCurrentQuestion();
-                startTimer();
-                resetBuzzButton();
+                startAdminTimer();
+                
+                // Emit next question to players
+                if (gameState.socket) {
+                    const question = gameState.quiz.questions[gameState.currentQuestionIndex];
+                    gameState.socket.emit('next_question', {
+                        session_id: gameState.sessionId,
+                        question: question,
+                        question_index: gameState.currentQuestionIndex,
+                        time_limit: gameState.quiz.settings.time_per_question
+                    });
+                }
             } else {
                 endQuiz();
             }
@@ -1228,81 +1316,102 @@ def get_html_template():
             const question = gameState.quiz.questions[gameState.currentQuestionIndex];
             const questionDisplay = `Q${gameState.currentQuestionIndex + 1}: ${question.text}`;
             
-            // Update displays
             document.getElementById('currentQuestionDisplay').textContent = questionDisplay;
             
-            const playerQuestion = document.getElementById('playerQuestion');
-            if (playerQuestion) {
-                playerQuestion.textContent = questionDisplay;
-                
-                const playerOptions = document.getElementById('playerOptions');
-                const openAnswerInput = document.getElementById('openAnswerInput');
-                
-                if (question.type === 'mcq') {
-                    playerOptions.style.display = 'block';
-                    openAnswerInput.style.display = 'none';
-                    playerOptions.innerHTML = Object.entries(question.options).map(([key, value]) => 
-                        `<button class="option-btn" onclick="selectOption('${key}')" id="option${key}">${key}. ${value}</button>`
-                    ).join('');
-                } else {
-                    playerOptions.style.display = 'none';
-                    openAnswerInput.style.display = 'block';
-                    document.getElementById('playerAnswer').value = '';
-                }
+            // Emit question to all players
+            if (gameState.socket && gameState.currentQuestionIndex === 0) {
+                // For first question, emit game_started
+                gameState.socket.emit('start_game', {
+                    session_id: gameState.sessionId,
+                    quiz: gameState.quiz,
+                    question: question,
+                    question_index: gameState.currentQuestionIndex,
+                    time_limit: gameState.quiz.settings.time_per_question
+                });
             }
         }
 
-        function startTimer() {
+        function startAdminTimer() {
             if (gameState.timer) clearInterval(gameState.timer);
             
             gameState.timeLeft = gameState.quiz.settings.time_per_question;
-            updateTimerDisplay();
+            updateAdminTimerDisplay();
             
             gameState.timer = setInterval(() => {
                 gameState.timeLeft--;
-                updateTimerDisplay();
+                updateAdminTimerDisplay();
+                
+                // Emit timer update to players
+                if (gameState.socket) {
+                    gameState.socket.emit('timer_update', {
+                        session_id: gameState.sessionId,
+                        time_left: gameState.timeLeft
+                    });
+                }
                 
                 if (gameState.timeLeft <= 0) {
                     clearInterval(gameState.timer);
-                    handleTimeUp();
+                    handleAdminTimeUp();
                 }
             }, 1000);
         }
 
-        function updateTimerDisplay() {
-            const timerElements = document.querySelectorAll('.timer');
-            const timeText = gameState.timeLeft > 0 ? gameState.timeLeft : 'TIME UP!';
-            
-            timerElements.forEach(timer => {
+        function updateAdminTimerDisplay() {
+            const timer = document.getElementById('adminTimer');
+            if (timer) {
+                const timeText = gameState.timeLeft > 0 ? gameState.timeLeft : 'TIME UP!';
                 timer.textContent = timeText;
                 timer.classList.toggle('warning', gameState.timeLeft <= 10);
-            });
+            }
         }
 
-        function handleTimeUp() {
-            const buzzButton = document.getElementById('buzzButton');
-            if (buzzButton) {
-                buzzButton.disabled = true;
-                buzzButton.classList.add('disabled');
-                buzzButton.textContent = 'TIME UP!';
-            }
-            
+        function handleAdminTimeUp() {
             updateBuzzActivity('⏰ Time up! Moving to next question.');
             setTimeout(() => nextQuestion(), 2000);
         }
 
-        function resetBuzzButton() {
-            const buzzButton = document.getElementById('buzzButton');
-            if (buzzButton) {
-                buzzButton.disabled = false;
-                buzzButton.classList.remove('disabled');
-                buzzButton.textContent = '🔔 BUZZ!';
+        // Player Functions
+        function displayPlayerQuestion(question) {
+            const playerQuestion = document.getElementById('playerQuestion');
+            if (!playerQuestion) return;
+            
+            const questionDisplay = `Q${gameState.currentQuestionIndex + 1}: ${question.text}`;
+            playerQuestion.textContent = questionDisplay;
+            
+            const playerOptions = document.getElementById('playerOptions');
+            const openAnswerInput = document.getElementById('openAnswerInput');
+            
+            if (question.type === 'mcq') {
+                playerOptions.style.display = 'block';
+                openAnswerInput.style.display = 'none';
+                playerOptions.innerHTML = Object.entries(question.options).map(([key, value]) => 
+                    `<button class="option-btn" onclick="selectOption('${key}')" id="option${key}">${key}. ${value}</button>`
+                ).join('');
+            } else {
+                playerOptions.style.display = 'none';
+                openAnswerInput.style.display = 'block';
+                document.getElementById('playerAnswer').value = '';
             }
         }
 
-        // Player Functions
+        function startPlayerTimer(timeLimit) {
+            gameState.timeLeft = timeLimit;
+            updatePlayerTimer(timeLimit);
+        }
+
+        function updatePlayerTimer(timeLeft) {
+            const timer = document.getElementById('playerTimer');
+            if (timer) {
+                const timeText = timeLeft > 0 ? timeLeft : 'TIME UP!';
+                timer.textContent = timeText;
+                timer.classList.toggle('warning', timeLeft <= 10);
+            }
+        }
+
         function buzz() {
-            if (!gameState.gameActive || gameState.timeLeft <= 0) return;
+            if (!gameState.gameActive || gameState.buzzed) return;
+            
+            gameState.buzzed = true;
             
             // Disable buzz button
             const buzzButton = document.getElementById('buzzButton');
@@ -1312,9 +1421,10 @@ def get_html_template():
             
             // Emit buzz to server
             if (gameState.socket) {
-                gameState.socket.emit('buzz', {
+                gameState.socket.emit('player_buzz', {
                     session_id: gameState.sessionId,
-                    user_id: gameState.currentUser.id
+                    user_id: gameState.currentUser.id,
+                    username: gameState.currentUser.username
                 });
             }
             
@@ -1342,15 +1452,14 @@ def get_html_template():
                 }
             });
             
-            showAnswerFeedback(isCorrect, question.correct_answer);
-            
             // Emit answer to server
             if (gameState.socket) {
                 gameState.socket.emit('submit_answer', {
                     session_id: gameState.sessionId,
                     user_id: gameState.currentUser.id,
                     answer: option,
-                    is_correct: isCorrect
+                    is_correct: isCorrect,
+                    question_index: gameState.currentQuestionIndex
                 });
             }
         }
@@ -1362,12 +1471,16 @@ def get_html_template():
                 return;
             }
             
+            // Disable input
+            document.getElementById('playerAnswer').disabled = true;
+            
             // Emit answer to server for admin review
             if (gameState.socket) {
                 gameState.socket.emit('submit_answer', {
                     session_id: gameState.sessionId,
                     user_id: gameState.currentUser.id,
-                    answer: playerAnswer
+                    answer: playerAnswer,
+                    question_index: gameState.currentQuestionIndex
                 });
             }
             
@@ -1383,13 +1496,41 @@ def get_html_template():
             } else if (isCorrect) {
                 playerFeedback.innerHTML = `<div class="message success" style="padding: 15px; border-radius: 10px;">✅ Correct! Well done!</div>`;
             } else {
-                playerFeedback.innerHTML = `<div class="message error" style="padding: 15px; border-radius: 10px;">❌ Wrong! Correct answer: ${message}</div>`;
+                playerFeedback.innerHTML = `<div class="message error" style="padding: 15px; border-radius: 10px;">❌ Wrong! ${message}</div>`;
             }
+        }
+
+        function resetBuzzButton() {
+            gameState.buzzed = false;
+            const buzzButton = document.getElementById('buzzButton');
+            if (buzzButton) {
+                buzzButton.disabled = false;
+                buzzButton.classList.remove('disabled');
+                buzzButton.textContent = '🔔 BUZZ!';
+            }
+            
+            // Hide answer options
+            document.getElementById('playerOptions').style.display = 'none';
+            document.getElementById('openAnswerInput').style.display = 'none';
+            document.getElementById('playerAnswer').disabled = false;
+            
+            // Clear feedback
+            document.getElementById('playerFeedback').innerHTML = '';
         }
 
         // Admin Functions
         function markAnswer(isCorrect) {
             updateBuzzActivity(`Admin marked answer as ${isCorrect ? 'CORRECT' : 'WRONG'}`);
+            
+            // Emit result to player
+            if (gameState.socket) {
+                gameState.socket.emit('answer_result', {
+                    session_id: gameState.sessionId,
+                    is_correct: isCorrect,
+                    message: isCorrect ? 'Correct!' : 'Wrong answer'
+                });
+            }
+            
             document.getElementById('answerControls').style.display = 'none';
             setTimeout(() => nextQuestion(), 2000);
         }
@@ -1405,6 +1546,59 @@ def get_html_template():
                 // Keep only last 5 messages
                 while (buzzActivity.children.length > 5) {
                     buzzActivity.removeChild(buzzActivity.lastChild);
+                }
+            }
+        }
+
+        // Leaderboard Functions
+        function updateLeaderboard(leaderboard) {
+            // Update player leaderboard
+            const playerLeaderboard = document.getElementById('playerLeaderboard');
+            if (playerLeaderboard) {
+                playerLeaderboard.innerHTML = generateLeaderboardHTML(leaderboard);
+            }
+            
+            // Update admin leaderboard
+            const liveLeaderboard = document.getElementById('liveLeaderboard');
+            if (liveLeaderboard) {
+                liveLeaderboard.innerHTML = generateLeaderboardHTML(leaderboard);
+            }
+        }
+
+        function updateAdminLeaderboard() {
+            const liveLeaderboard = document.getElementById('liveLeaderboard');
+            if (liveLeaderboard && gameState.connectedPlayers.length > 0) {
+                // Sort players by score
+                const sortedPlayers = [...gameState.connectedPlayers].sort((a, b) => (b.score || 0) - (a.score || 0));
+                liveLeaderboard.innerHTML = generateLeaderboardHTML(sortedPlayers);
+            }
+        }
+
+        function generateLeaderboardHTML(leaderboard) {
+            if (!leaderboard || leaderboard.length === 0) {
+                return '<p>No players yet</p>';
+            }
+            
+            return leaderboard.map((player, index) => `
+                <div class="leaderboard-item ${index === 0 ? 'winner' : ''}">
+                    <span>${index + 1}. ${player.username || player.name}</span>
+                    <span>${player.score || player.current_score || 0} points</span>
+                </div>
+            `).join('');
+        }
+
+        function updateConnectedPlayersList() {
+            const connectedList = document.getElementById('connectedPlayersList');
+            if (connectedList) {
+                if (gameState.connectedPlayers.length === 0) {
+                    connectedList.innerHTML = '<p>No players connected yet</p>';
+                } else {
+                    connectedList.innerHTML = gameState.connectedPlayers.map(player => `
+                        <div class="leaderboard-item">
+                            <span>${player.username}</span>
+                            <span>Ready</span>
+                        </div>
+                    `).join('');
                 }
             }
         }
@@ -1474,22 +1668,13 @@ def get_html_template():
 def home():
     return render_template_string(get_html_template())
 
-# API info route moved to /api/info
+# API Routes
 @app.route('/api/info')
 def api_info():
     return jsonify({
         'message': 'Buzzer Quiz Game API',
         'status': 'running',
-        'version': '1.0.0',
-        'endpoints': {
-            'health': '/api/health',
-            'login': '/api/login',
-            'register': '/api/register',
-            'quizzes': '/api/quizzes',
-            'players': '/api/players',
-            'sessions': '/api/sessions',
-            'stats': '/api/stats'
-        }
+        'version': '1.0.0'
     })
 
 @app.route('/api/login', methods=['POST'])
@@ -1537,12 +1722,15 @@ def logout():
     session.clear()
     return jsonify({'success': True, 'message': 'Logged out successfully'})
 
+# Continuing from where the code was cut off...
+
 @app.route('/api/register', methods=['POST'])
 @admin_required
-def register_player():
+def register():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
+    role = data.get('role', 'player')
     
     if not username or not password:
         return jsonify({'success': False, 'message': 'Username and password required'})
@@ -1551,29 +1739,76 @@ def register_player():
     if not connection:
         return jsonify({'success': False, 'message': 'Database connection error'})
     
-    cursor = connection.cursor()
-    
-    # Check if username already exists
-    cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
-    if cursor.fetchone():
+    try:
+        cursor = connection.cursor()
+        
+        # Check if username already exists
+        cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+        if cursor.fetchone():
+            return jsonify({'success': False, 'message': 'Username already exists'})
+        
+        # Create new user
+        password_hash = hash_password(password)
+        cursor.execute("""
+            INSERT INTO users (username, password_hash, role) 
+            VALUES (%s, %s, %s)
+        """, (username, password_hash, role))
+        
+        user_id = cursor.lastrowid
         cursor.close()
         connection.close()
-        return jsonify({'success': False, 'message': 'Username already exists'})
+        
+        return jsonify({
+            'success': True, 
+            'message': 'User created successfully',
+            'user_id': user_id
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error creating user: {str(e)}'})
+
+@app.route('/api/players', methods=['GET'])
+@admin_required
+def get_players():
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'success': False, 'message': 'Database connection error'})
     
-    # Insert new user
-    password_hash = hash_password(password)
+    cursor = connection.cursor()
     cursor.execute("""
-        INSERT INTO users (username, password_hash, role) 
-        VALUES (%s, %s, 'player')
-    """, (username, password_hash))
+        SELECT id, username, total_score, games_played, created_at 
+        FROM users WHERE role = 'player'
+        ORDER BY total_score DESC
+    """)
     
-    connection.commit()
+    players = cursor.fetchall()
     cursor.close()
     connection.close()
     
-    return jsonify({'success': True, 'message': 'Player registered successfully'})
+    return jsonify({'success': True, 'players': players})
 
-# Quiz Management Routes
+@app.route('/api/players/<int:player_id>', methods=['DELETE'])
+@admin_required
+def remove_player(player_id):
+    connection = get_db_connection()
+    if not connection:
+        return jsonify({'success': False, 'message': 'Database connection error'})
+    
+    try:
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM users WHERE id = %s AND role = 'player'", (player_id,))
+        
+        if cursor.rowcount == 0:
+            return jsonify({'success': False, 'message': 'Player not found'})
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'success': True, 'message': 'Player removed successfully'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error removing player: {str(e)}'})
+
 @app.route('/api/quizzes', methods=['GET'])
 @login_required
 def get_quizzes():
@@ -1583,8 +1818,8 @@ def get_quizzes():
     
     cursor = connection.cursor()
     cursor.execute("""
-        SELECT q.id, q.title, q.correct_points, q.wrong_points, q.time_per_question, 
-               q.created_at, u.username as created_by,
+        SELECT q.id, q.title, q.correct_points, q.wrong_points, 
+               q.time_per_question, q.created_at, u.username as created_by,
                COUNT(qs.id) as question_count
         FROM quizzes q
         LEFT JOIN users u ON q.created_by = u.id
@@ -1593,19 +1828,7 @@ def get_quizzes():
         ORDER BY q.created_at DESC
     """)
     
-    quizzes = []
-    for row in cursor.fetchall():
-        quizzes.append({
-            'id': row['id'],
-            'title': row['title'],
-            'correct_points': row['correct_points'],
-            'wrong_points': row['wrong_points'],
-            'time_per_question': row['time_per_question'],
-            'created_at': row['created_at'].isoformat() if row['created_at'] else None,
-            'created_by': row['created_by'],
-            'question_count': row['question_count'] or 0
-        })
-    
+    quizzes = cursor.fetchall()
     cursor.close()
     connection.close()
     
@@ -1621,36 +1844,40 @@ def create_quiz():
     time_per_question = data.get('time_per_question', 30)
     questions = data.get('questions', [])
     
-    if not title:
-        return jsonify({'success': False, 'message': 'Quiz title required'})
+    if not title or not questions:
+        return jsonify({'success': False, 'message': 'Title and questions required'})
     
     connection = get_db_connection()
     if not connection:
         return jsonify({'success': False, 'message': 'Database connection error'})
     
-    cursor = connection.cursor()
-    
-    # Insert quiz
-    cursor.execute("""
-        INSERT INTO quizzes (title, created_by, correct_points, wrong_points, time_per_question)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (title, session['user_id'], correct_points, wrong_points, time_per_question))
-    
-    quiz_id = connection.insert_id()
-    
-    # Insert questions
-    for i, question in enumerate(questions):
-        options_json = json.dumps(question.get('options', {})) if question.get('options') else None
+    try:
+        cursor = connection.cursor()
+        
+        # Create quiz
         cursor.execute("""
-            INSERT INTO questions (quiz_id, question_text, question_type, options, correct_answer, question_order)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (quiz_id, question['text'], question['type'], options_json, question.get('correct_answer'), i))
-    
-    connection.commit()
-    cursor.close()
-    connection.close()
-    
-    return jsonify({'success': True, 'message': 'Quiz created successfully', 'quiz_id': quiz_id})
+            INSERT INTO quizzes (title, created_by, correct_points, wrong_points, time_per_question)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (title, session['user_id'], correct_points, wrong_points, time_per_question))
+        
+        quiz_id = cursor.lastrowid
+        
+        # Add questions
+        for i, question in enumerate(questions):
+            options_json = json.dumps(question.get('options')) if question.get('options') else None
+            cursor.execute("""
+                INSERT INTO questions (quiz_id, question_text, question_type, options, correct_answer, question_order)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (quiz_id, question['text'], question['type'], options_json, 
+                  question.get('correct_answer'), i + 1))
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'success': True, 'quiz_id': quiz_id, 'message': 'Quiz created successfully'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error creating quiz: {str(e)}'})
 
 @app.route('/api/quizzes/<int:quiz_id>', methods=['GET'])
 @login_required
@@ -1663,51 +1890,43 @@ def get_quiz(quiz_id):
     
     # Get quiz details
     cursor.execute("""
-        SELECT id, title, correct_points, wrong_points, time_per_question, created_at
-        FROM quizzes WHERE id = %s
+        SELECT q.*, u.username as created_by_name
+        FROM quizzes q
+        LEFT JOIN users u ON q.created_by = u.id
+        WHERE q.id = %s
     """, (quiz_id,))
     
     quiz = cursor.fetchone()
     if not quiz:
-        cursor.close()
-        connection.close()
         return jsonify({'success': False, 'message': 'Quiz not found'})
     
     # Get questions
     cursor.execute("""
-        SELECT id, question_text, question_type, options, correct_answer, question_order
-        FROM questions WHERE quiz_id = %s ORDER BY question_order
+        SELECT id, question_text as text, question_type as type, options, correct_answer, question_order
+        FROM questions
+        WHERE quiz_id = %s
+        ORDER BY question_order
     """, (quiz_id,))
     
-    questions = []
-    for row in cursor.fetchall():
-        questions.append({
-            'id': row['id'],
-            'text': row['question_text'],
-            'type': row['question_type'],
-            'options': json.loads(row['options']) if row['options'] else None,
-            'correct_answer': row['correct_answer'],
-            'order': row['question_order']
-        })
+    questions = cursor.fetchall()
+    
+    # Parse JSON options
+    for question in questions:
+        if question['options']:
+            question['options'] = json.loads(question['options'])
+    
+    quiz['questions'] = questions
+    quiz['settings'] = {
+        'correct_points': quiz['correct_points'],
+        'wrong_points': quiz['wrong_points'],
+        'time_per_question': quiz['time_per_question']
+    }
     
     cursor.close()
     connection.close()
     
-    quiz_data = {
-        'id': quiz['id'],
-        'title': quiz['title'],
-        'settings': {
-            'correct_points': quiz['correct_points'],
-            'wrong_points': quiz['wrong_points'],
-            'time_per_question': quiz['time_per_question']
-        },
-        'questions': questions,
-        'created_at': quiz['created_at'].isoformat() if quiz['created_at'] else None
-    }
-    
-    return jsonify({'success': True, 'quiz': quiz_data})
+    return jsonify({'success': True, 'quiz': quiz})
 
-# Game Session Management
 @app.route('/api/sessions', methods=['POST'])
 @admin_required
 def create_session():
@@ -1721,25 +1940,41 @@ def create_session():
     if not connection:
         return jsonify({'success': False, 'message': 'Database connection error'})
     
-    cursor = connection.cursor()
-    
-    # Generate unique session code
-    session_code = secrets.token_hex(4).upper()
-    
-    cursor.execute("""
-        INSERT INTO game_sessions (quiz_id, host_id, session_code)
-        VALUES (%s, %s, %s)
-    """, (quiz_id, session['user_id'], session_code))
-    
-    session_id = connection.insert_id()
-    cursor.close()
-    connection.close()
-    
-    return jsonify({
-        'success': True, 
-        'session_id': session_id,
-        'session_code': session_code
-    })
+    try:
+        cursor = connection.cursor()
+        
+        # Generate unique session code
+        session_code = secrets.token_urlsafe(6).upper()
+        
+        cursor.execute("""
+            INSERT INTO game_sessions (quiz_id, host_id, session_code, status)
+            VALUES (%s, %s, %s, 'waiting')
+        """, (quiz_id, session['user_id'], session_code))
+        
+        session_id = cursor.lastrowid
+        
+        # Update global state
+        game_state['current_session'] = session_id
+        game_state['active_games'][session_id] = {
+            'quiz_id': quiz_id,
+            'host_id': session['user_id'],
+            'session_code': session_code,
+            'status': 'waiting',
+            'players': {},
+            'current_question': 0
+        }
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({
+            'success': True, 
+            'session_id': session_id,
+            'session_code': session_code
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error creating session: {str(e)}'})
 
 @app.route('/api/sessions/<int:session_id>/start', methods=['POST'])
 @admin_required
@@ -1748,161 +1983,45 @@ def start_session(session_id):
     if not connection:
         return jsonify({'success': False, 'message': 'Database connection error'})
     
-    cursor = connection.cursor()
-    cursor.execute("""
-        UPDATE game_sessions SET status = 'active' WHERE id = %s AND host_id = %s
-    """, (session_id, session['user_id']))
-    
-    cursor.close()
-    connection.close()
-    
-    # Emit to all connected clients
-    socketio.emit('game_started', {'session_id': session_id}, room=f'session_{session_id}')
-    
-    return jsonify({'success': True, 'message': 'Game session started'})
-
-# Players Management
-@app.route('/api/players', methods=['GET'])
-@admin_required
-def get_players():
-    connection = get_db_connection()
-    if not connection:
-        return jsonify({'success': False, 'message': 'Database connection error'})
-    
-    cursor = connection.cursor()
-    cursor.execute("""
-        SELECT id, username, total_score, games_played, created_at
-        FROM users WHERE role = 'player'
-        ORDER BY total_score DESC
-    """)
-    
-    players = []
-    for row in cursor.fetchall():
-        players.append({
-            'id': row['id'],
-            'username': row['username'],
-            'total_score': row['total_score'],
-            'games_played': row['games_played'],
-            'created_at': row['created_at'].isoformat() if row['created_at'] else None
-        })
-    
-    cursor.close()
-    connection.close()
-    
-    return jsonify({'success': True, 'players': players})
-
-@app.route('/api/players/<int:player_id>', methods=['DELETE'])
-@admin_required
-def delete_player(player_id):
-    connection = get_db_connection()
-    if not connection:
-        return jsonify({'success': False, 'message': 'Database connection error'})
-    
-    cursor = connection.cursor()
-    cursor.execute("DELETE FROM users WHERE id = %s AND role = 'player'", (player_id,))
-    
-    if cursor.rowcount > 0:
+    try:
+        cursor = connection.cursor()
+        cursor.execute("""
+            UPDATE game_sessions 
+            SET status = 'active' 
+            WHERE id = %s AND host_id = %s
+        """, (session_id, session['user_id']))
+        
+        if cursor.rowcount == 0:
+            return jsonify({'success': False, 'message': 'Session not found or access denied'})
+        
+        # Update game state
+        if session_id in game_state['active_games']:
+            game_state['active_games'][session_id]['status'] = 'active'
+        
         cursor.close()
         connection.close()
-        return jsonify({'success': True, 'message': 'Player deleted successfully'})
-    else:
-        cursor.close()
-        connection.close()
-        return jsonify({'success': False, 'message': 'Player not found'})
-
-# SocketIO Events for Real-time Features
-@socketio.on('connect')
-def handle_connect():
-    print(f'Client connected: {request.sid}')
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print(f'Client disconnected: {request.sid}')
-    # Clean up user from game state
-    for session_id, session_data in game_state['active_games'].items():
-        if request.sid in session_data.get('connected_players', {}):
-            del session_data['connected_players'][request.sid]
-
-@socketio.on('join_session')
-def handle_join_session(data):
-    session_id = data.get('session_id')
-    user_id = data.get('user_id')
-    
-    if session_id and user_id:
-        join_room(f'session_{session_id}')
         
-        # Initialize session in game state if not exists
-        if session_id not in game_state['active_games']:
-            game_state['active_games'][session_id] = {
-                'connected_players': {},
-                'current_question': 0,
-                'buzzed_player': None,
-                'timer_active': False
-            }
+        return jsonify({'success': True, 'message': 'Session started'})
         
-        game_state['active_games'][session_id]['connected_players'][request.sid] = {
-            'user_id': user_id,
-            'connected_at': datetime.now()
-        }
-        
-        emit('joined_session', {'session_id': session_id})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error starting session: {str(e)}'})
 
-@socketio.on('buzz')
-def handle_buzz(data):
-    session_id = data.get('session_id')
-    user_id = data.get('user_id')
-    
-    if session_id in game_state['active_games']:
-        session_data = game_state['active_games'][session_id]
-        
-        # Check if no one has buzzed yet
-        if not session_data.get('buzzed_player'):
-            session_data['buzzed_player'] = {
-                'user_id': user_id,
-                'buzz_time': datetime.now()
-            }
-            
-            # Notify all players in the session
-            socketio.emit('player_buzzed', {
-                'user_id': user_id,
-                'session_id': session_id
-            }, room=f'session_{session_id}')
-
-@socketio.on('submit_answer')
-def handle_submit_answer(data):
-    session_id = data.get('session_id')
-    user_id = data.get('user_id')
-    answer = data.get('answer')
-    
-    # Emit to admin for review
-    socketio.emit('answer_submitted', {
-        'user_id': user_id,
-        'answer': answer,
-        'session_id': session_id
-    }, room=f'session_{session_id}')
-
-# Health check endpoint
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'healthy', 'message': 'Server is running'})
-
-# Dashboard stats
 @app.route('/api/stats', methods=['GET'])
 @admin_required
-def get_dashboard_stats():
+def get_stats():
     connection = get_db_connection()
     if not connection:
         return jsonify({'success': False, 'message': 'Database connection error'})
     
     cursor = connection.cursor()
     
-    # Get player count
+    # Get total players
     cursor.execute("SELECT COUNT(*) as count FROM users WHERE role = 'player'")
-    player_count = cursor.fetchone()['count']
+    total_players = cursor.fetchone()['count']
     
-    # Get quiz count
+    # Get total quizzes
     cursor.execute("SELECT COUNT(*) as count FROM quizzes")
-    quiz_count = cursor.fetchone()['count']
+    total_quizzes = cursor.fetchone()['count']
     
     # Get active sessions
     cursor.execute("SELECT COUNT(*) as count FROM game_sessions WHERE status = 'active'")
@@ -1914,26 +2033,296 @@ def get_dashboard_stats():
     return jsonify({
         'success': True,
         'stats': {
-            'total_players': player_count,
-            'total_quizzes': quiz_count,
+            'total_players': total_players,
+            'total_quizzes': total_quizzes,
             'active_sessions': active_sessions
         }
     })
 
-if __name__ == '__main__':
-    # Initialize database on startup
-    print("Initializing database...")
-    if init_database():
-        print("Database initialized successfully!")
-        print("Default admin user: username='admin', password='admin123'")
-    else:
-        print("Failed to initialize database!")
+# Socket.IO Events
+@socketio.on('connect')
+def handle_connect():
+    print(f'User connected: {request.sid}')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f'User disconnected: {request.sid}')
+    
+    # Remove user from connected users and game state
+    if request.sid in game_state['connected_users']:
+        user_info = game_state['connected_users'][request.sid]
+        del game_state['connected_users'][request.sid]
         
-    port = int(os.getenv('PORT', 5000))
-    if os.getenv('FLASK_ENV') == 'production':
-        socketio.run(app, host='0.0.0.0', port=port, debug=False)
+        # Notify other users about disconnection
+        emit('players_update', {
+            'players': list(game_state['connected_users'].values())
+        }, broadcast=True)
+
+@socketio.on('join_as_player')
+def handle_join_as_player(data):
+    user_id = data.get('user_id')
+    username = data.get('username')
+    is_admin = data.get('is_admin', False)
+    
+    # Store user connection info
+    game_state['connected_users'][request.sid] = {
+        'user_id': user_id,
+        'username': username,
+        'is_admin': is_admin,
+        'score': 0,
+        'sid': request.sid
+    }
+    
+    print(f'Player joined: {username} (Admin: {is_admin})')
+    
+    # Broadcast updated player list to all clients
+    players_list = [user for user in game_state['connected_users'].values() if not user['is_admin']]
+    emit('players_update', {
+        'players': players_list
+    }, broadcast=True)
+
+@socketio.on('start_game')
+def handle_start_game(data):
+    session_id = data.get('session_id')
+    quiz = data.get('quiz')
+    question = data.get('question')
+    question_index = data.get('question_index')
+    time_limit = data.get('time_limit')
+    
+    # Reset game state
+    game_state['current_session'] = session_id
+    game_state['current_quiz'] = quiz
+    game_state['current_question_index'] = question_index
+    game_state['buzzed_player'] = None
+    
+    # Emit to all players
+    emit('game_started', {
+        'session_id': session_id,
+        'quiz': quiz
+    }, broadcast=True)
+    
+    # Emit first question
+    emit('question_update', {
+        'question': question,
+        'question_index': question_index,
+        'time_limit': time_limit
+    }, broadcast=True)
+
+@socketio.on('next_question')
+def handle_next_question(data):
+    session_id = data.get('session_id')
+    question = data.get('question')
+    question_index = data.get('question_index')
+    time_limit = data.get('time_limit')
+    
+    game_state['current_question_index'] = question_index
+    game_state['buzzed_player'] = None
+    
+    emit('question_update', {
+        'question': question,
+        'question_index': question_index,
+        'time_limit': time_limit
+    }, broadcast=True)
+
+@socketio.on('player_buzz')
+def handle_player_buzz(data):
+    session_id = data.get('session_id')
+    user_id = data.get('user_id')
+    username = data.get('username')
+    
+    # Only allow first buzz
+    if game_state['buzzed_player'] is None:
+        game_state['buzzed_player'] = {
+            'user_id': user_id,
+            'username': username,
+            'time': datetime.now()
+        }
+        
+        # Broadcast buzz event
+        emit('player_buzzed', {
+            'user_id': user_id,
+            'username': username,
+            'session_id': session_id
+        }, broadcast=True)
+        
+        # Log buzz in database
+        connection = get_db_connection()
+        if connection:
+            try:
+                cursor = connection.cursor()
+                cursor.execute("""
+                    INSERT INTO buzz_log (session_id, user_id, question_id, buzz_time)
+                    VALUES (%s, %s, %s, %s)
+                """, (session_id, user_id, 
+                      game_state['current_quiz']['questions'][game_state['current_question_index']]['id'] if game_state.get('current_quiz') else None,
+                      datetime.now()))
+                cursor.close()
+                connection.close()
+            except Exception as e:
+                print(f"Error logging buzz: {e}")
+
+@socketio.on('submit_answer')
+def handle_submit_answer(data):
+    session_id = data.get('session_id')
+    user_id = data.get('user_id')
+    answer = data.get('answer')
+    is_correct = data.get('is_correct')
+    question_index = data.get('question_index')
+    
+    # For MCQ questions, we can immediately determine correctness
+    if is_correct is not None:
+        points = 0
+        if is_correct:
+            points = game_state['current_quiz']['settings']['correct_points']
+        else:
+            points = -game_state['current_quiz']['settings']['wrong_points']
+        
+        # Update player score
+        if request.sid in game_state['connected_users']:
+            game_state['connected_users'][request.sid]['score'] = game_state['connected_users'][request.sid].get('score', 0) + points
+        
+        # Update database
+        connection = get_db_connection()
+        if connection:
+            try:
+                cursor = connection.cursor()
+                # Update or insert participant score
+                cursor.execute("""
+                    INSERT INTO game_participants (session_id, user_id, current_score)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE current_score = current_score + %s
+                """, (session_id, user_id, points, points))
+                
+                # Update buzz log
+                cursor.execute("""
+                    UPDATE buzz_log 
+                    SET was_correct = %s, points_awarded = %s
+                    WHERE session_id = %s AND user_id = %s 
+                    ORDER BY buzz_time DESC LIMIT 1
+                """, (is_correct, points, session_id, user_id))
+                
+                cursor.close()
+                connection.close()
+            except Exception as e:
+                print(f"Error updating scores: {e}")
+        
+        # Emit result
+        emit('answer_result', {
+            'user_id': user_id,
+            'is_correct': is_correct,
+            'points': points,
+            'message': 'Correct!' if is_correct else 'Wrong answer'
+        }, broadcast=True)
+        
+        # Update leaderboard
+        players_list = [user for user in game_state['connected_users'].values() if not user['is_admin']]
+        sorted_players = sorted(players_list, key=lambda x: x.get('score', 0), reverse=True)
+        emit('leaderboard_update', {
+            'leaderboard': sorted_players
+        }, broadcast=True)
     else:
-        socketio.run(app, debug=True, host='0.0.0.0', port=port)
+        # For open-ended questions, admin needs to review
+        emit('admin_review_needed', {
+            'user_id': user_id,
+            'username': game_state['connected_users'][request.sid]['username'],
+            'answer': answer,
+            'session_id': session_id
+        }, room=request.sid)
 
+@socketio.on('answer_result')
+def handle_answer_result(data):
+    session_id = data.get('session_id')
+    is_correct = data.get('is_correct')
+    message = data.get('message')
+    
+    emit('answer_result', {
+        'session_id': session_id,
+        'is_correct': is_correct,
+        'message': message
+    }, broadcast=True)
 
+@socketio.on('timer_update')
+def handle_timer_update(data):
+    session_id = data.get('session_id')
+    time_left = data.get('time_left')
+    
+    emit('timer_update', {
+        'session_id': session_id,
+        'time_left': time_left
+    }, broadcast=True)
 
+@socketio.on('end_game')
+def handle_end_game(data):
+    session_id = data.get('session_id')
+    
+    # Get final leaderboard
+    players_list = [user for user in game_state['connected_users'].values() if not user['is_admin']]
+    final_leaderboard = sorted(players_list, key=lambda x: x.get('score', 0), reverse=True)
+    
+    # Update database
+    connection = get_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            cursor.execute("""
+                UPDATE game_sessions 
+                SET status = 'completed' 
+                WHERE id = %s
+            """, (session_id,))
+            
+            # Update player statistics
+            for player in final_leaderboard:
+                cursor.execute("""
+                    UPDATE users 
+                    SET total_score = total_score + %s, games_played = games_played + 1
+                    WHERE id = %s
+                """, (player.get('score', 0), player['user_id']))
+            
+            cursor.close()
+            connection.close()
+        except Exception as e:
+            print(f"Error updating final scores: {e}")
+    
+    # Reset game state
+    game_state['current_session'] = None
+    game_state['current_quiz'] = None
+    game_state['current_question_index'] = 0
+    game_state['buzzed_player'] = None
+    
+    emit('game_ended', {
+        'session_id': session_id,
+        'final_leaderboard': final_leaderboard
+    }, broadcast=True)
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'success': False, 'message': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'success': False, 'message': 'Internal server error'}), 500
+
+# Initialize database and start the application
+if __name__ == '__main__':
+    print("🎯 Starting Ultimate Buzzer Quiz Game...")
+    
+    # Initialize database
+    if init_database():
+        print("✅ Database initialized successfully")
+    else:
+        print("❌ Database initialization failed")
+        exit(1)
+    
+    # Start the Flask-SocketIO server
+    print("🚀 Starting server...")
+    print("🌐 Access the game at: http://localhost:5000")
+    print("👑 Default admin login: admin / admin123")
+    
+    socketio.run(
+        app, 
+        debug=True, 
+        host='0.0.0.0', 
+        port=5000,
+        allow_unsafe_werkzeug=True
+    )
