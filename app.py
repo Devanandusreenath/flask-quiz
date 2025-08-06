@@ -20,11 +20,11 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Database configuration
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', ''),
-    'database': os.getenv('DB_NAME', 'buzzer_quiz_game'),
-    'port': int(os.getenv('DB_PORT', 3306))
+    'host': os.getenv('MYSQL_DATABASE', 'localhost'),
+    'user': os.getenv('MYSQLUSER', 'root'),
+    'password': os.getenv('MYSQL_ROOT_PASSWORD', ''),
+    'database': os.getenv('MYSQL_DATABASE', 'buzzer_quiz_game'),
+    'port': int(os.getenv('MYSQLPORT', 3306))
 }
 # Global game state
 game_state = {
@@ -1934,3 +1934,4 @@ if __name__ == '__main__':
         socketio.run(app, host='0.0.0.0', port=port, debug=False)
     else:
         socketio.run(app, debug=True, host='0.0.0.0', port=port)
+
