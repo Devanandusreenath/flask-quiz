@@ -621,13 +621,13 @@ def get_html_template():
                     <input type="password" id="password" placeholder="Enter password">
                 </div>
                 <button class="btn btn-primary" onclick="login()">Login</button>
-                <div id="loginMessage"></div>
-                <div style="margin-top: 20px; padding: 15px; background: rgba(255, 255, 255, 0.1); border-radius: 10px;">
-                    <h3>Default Login Credentials:</h3>
-                    <p><strong>Admin:</strong> admin / admin123</p>
-                    <p><em>Create player accounts from the admin dashboard</em></p>
-                </div>
-            </div>
+            #     <div id="loginMessage"></div>
+            #     <div style="margin-top: 20px; padding: 15px; background: rgba(255, 255, 255, 0.1); border-radius: 10px;">
+            #         <h3>Default Login Credentials:</h3>
+            #         <p><strong>Admin:</strong> admin / admin123</p>
+            #         <p><em>Create player accounts from the admin dashboard</em></p>
+            #     </div>
+            # </div>
         </div>
 
         <!-- Admin Dashboard -->
@@ -2326,3 +2326,4 @@ if __name__ == '__main__':
         port=5000,
         allow_unsafe_werkzeug=True
     )
+
